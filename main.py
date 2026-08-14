@@ -271,6 +271,19 @@ def replace_readme():
 
         new_edit_readme_md[0] = edit_readme_md
         before_info_list =  re.findall(r'\{\{latest_content\}\}.*\[订阅地址\]\(.*\)' ,edit_readme_md);
+        # 为邮件排版解析每行的分类与源名称（与 before_info_list 顺序一一对应）
+        row_meta = []
+        current_cat = "未分类"
+        for line in edit_readme_md.split("\n"):
+            m_cat = re.search(r'<h2 id="[^"]*">([^<]+)</h2>', line)
+            if m_cat:
+                current_cat = m_cat.group(1).strip()
+                continue
+            if ("{{latest_content}}" in line) and ("[订阅地址]" in line):
+                fields = line.split("|")
+                src_name = fields[2].strip() if len(fields) > 2 else "未命名源"
+                src_name = re.sub(r'<[^>]+>', '', src_name)
+                row_meta.append((current_cat, src_name))
         # 填充统计RSS数量
         new_edit_readme_md[0] = new_edit_readme_md[0].replace("{{rss_num}}", str(len(before_info_list)))
         # 填充统计时间
@@ -350,6 +363,9 @@ def replace_readme():
     new_edit_readme_md[0] = new_edit_readme_md[0].replace("{{news}}", current_date_news_index[0])
     # 替换EditREADME中的新文章数量索引
     new_edit_readme_md[0] = new_edit_readme_md[0].replace("{{new_num}}", str(new_num))
+    # 快照邮件排版数据（进程池已结束，转为普通列表）
+    new_edit_readme_md.append(row_meta)
+    new_edit_readme_md.append([list(x) for x in rss_info_list])
     # 添加CDN
     new_edit_readme_md[0] = new_edit_readme_md[0].replace("./_media", "https://cdn.jsdelivr.net/gh/zhaoolee/garss/_media")
         
@@ -495,6 +511,66 @@ def create_json():
     with open("./garssInfo.json","w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=4)
 
+def build_email_html(row_meta, feeds):
+    """把抓取结果排成一封可读的 HTML 早报：分类分块、今日更新突出、旧闻小字带过。"""
+    import html as html_lib
+
+    def esc(s):
+        return html_lib.escape(str(s), quote=True)
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    bj_now = datetime.fromtimestamp(int(time.time()), ZoneInfo('Asia/Shanghai'))
+    date_label = bj_now.strftime('%Y年%m月%d日')
+
+    cats = []
+    cat_map = {}
+    for (cat, name), items in zip(row_meta, feeds):
+        if cat not in cat_map:
+            cat_map[cat] = []
+            cats.append(cat)
+        cat_map[cat].append((name, list(items)))
+
+    total_new = 0
+    cat_sections = []
+    toc_items = []
+    for cat in cats:
+        fresh_html = []
+        idle_html = []
+        cat_new = 0
+        for name, items in cat_map[cat]:
+            todays = [it for it in items if isinstance(it, dict) and it.get("date") == today]
+            cat_new += len(todays)
+            if todays:
+                links = "".join(
+                    '<div style="margin:3px 0;line-height:1.6;"><a href="%s" style="color:#2b6cb0;text-decoration:none;">🌈 %s</a></div>'
+                    % (esc(it.get("link", "")), esc(it.get("title", "")))
+                    for it in todays[:3])
+                more = ('<div style="color:#b3a28e;font-size:12px;">……今日共 %d 篇，进源站看全部</div>' % len(todays)) if len(todays) > 3 else ""
+                fresh_html.append('<div style="margin:12px 0;"><div style="font-weight:bold;color:#584D49;font-size:15px;">%s</div>%s%s</div>' % (esc(name), links, more))
+            elif items and isinstance(items[0], dict):
+                it = items[0]
+                idle_html.append('<div style="color:#b3a28e;font-size:12px;line-height:1.9;">%s ｜ %s <a href="%s" style="color:#c0b2a0;text-decoration:none;">%s</a></div>' % (esc(name), esc(it.get("date", "")), esc(it.get("link", "")), esc(it.get("title", ""))))
+        total_new += cat_new
+        toc_items.append('%s %d' % (esc(cat), cat_new))
+        section = '<div style="margin:26px 0 6px;padding:6px 12px;background:#FAF6EA;border-left:4px solid #e2c98f;font-weight:bold;color:#584D49;font-size:17px;">%s<span style="font-weight:normal;color:#b3a28e;font-size:13px;">　今日更新 %d 篇</span></div>' % (esc(cat), cat_new)
+        section += "".join(fresh_html)
+        if idle_html:
+            section += '<div style="margin:10px 0 0;color:#c0b2a0;font-size:12px;">—— 暂无今日更新 ——</div>' + "".join(idle_html)
+        cat_sections.append(section)
+
+    html_doc = (
+        '<div style="max-width:680px;margin:0 auto;padding:20px 16px;font-family:-apple-system,\'PingFang SC\',\'Microsoft YaHei\',sans-serif;background:#fffdf8;">'
+        '<div style="font-size:22px;font-weight:bold;color:#584D49;">🐣 嘎！RSS 早报</div>'
+        '<div style="color:#b3a28e;font-size:13px;margin:4px 0 2px;">%s ｜ 今日更新 <b style="color:#d19a3f;">%d</b> 篇 ｜ 订阅源 %d 个</div>'
+        '<div style="color:#c0b2a0;font-size:12px;margin-bottom:8px;">分类速览：%s</div>'
+        '<hr style="border:none;border-top:1px solid #efe6d4;"/>'
+        '%s'
+        '<div style="margin-top:28px;color:#c0b2a0;font-size:12px;text-align:center;">由 garss 自动印报 · 为打破信息茧房而生</div>'
+        '</div>'
+    ) % (date_label, total_new, len(row_meta), ' · '.join(toc_items), "".join(cat_sections))
+    return html_doc, total_new, date_label
+
+
 def main():
     create_json()
     create_opml()
@@ -502,13 +578,19 @@ def main():
     content = markdown.markdown(readme_md[0], extensions=['tables', 'fenced_code']) if markdown else readme_md[0]
     email_list = get_email_list()
 
-    mail_re = r'邮件内容区开始>([.\S\s]*)<邮件内容区结束'
-    reResult = re.findall(mail_re, readme_md[0])
-
     try:
-        send_mail(email_list, "嘎!RSS订阅", reResult)
+        row_meta = readme_md[2]
+        feeds = readme_md[3]
+        html_doc, total_new, date_label = build_email_html(row_meta, feeds)
+        send_mail(email_list, "嘎!RSS早报 · %s · 今日更新%d篇" % (date_label, total_new), html_doc)
     except Exception as e:
-        print("==邮件设信息置错误===》》", e)
+        print("==新版邮件排版失败，回退旧版===》》", e)
+        mail_re = r'邮件内容区开始>([.\S\s]*)<邮件内容区结束'
+        reResult = re.findall(mail_re, readme_md[0])
+        try:
+            send_mail(email_list, "嘎!RSS订阅", reResult)
+        except Exception as e2:
+            print("==邮件设信息置错误===》》", e2)
 
 
 if __name__ == "__main__":
