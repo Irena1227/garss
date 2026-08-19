@@ -571,6 +571,23 @@ def build_email_html(row_meta, feeds):
     return html_doc, total_new, date_label
 
 
+def save_newspaper_html(html_doc, date_label):
+    """把当天报纸 HTML 落盘到 newspaper/，供仓库外部直接读取"""
+    date_str = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
+    out_dir = os.path.join(os.getcwd(), "newspaper")
+    os.makedirs(out_dir, exist_ok=True)
+    page = (
+        '<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n'
+        '<meta charset="utf-8"/>\n'
+        '<title>嘎!RSS早报 · %s</title>\n'
+        '</head>\n<body style="margin:0;background:#f7f2e8;">\n%s\n</body>\n</html>\n'
+    ) % (date_label, html_doc)
+    for name in ("%s.html" % date_str, "latest.html"):
+        with open(os.path.join(out_dir, name), "w", encoding="utf-8") as f:
+            f.write(page)
+    print("==报纸已存档===》》 newspaper/%s.html" % date_str)
+
+
 def main():
     create_json()
     create_opml()
@@ -582,6 +599,7 @@ def main():
         row_meta = readme_md[2]
         feeds = readme_md[3]
         html_doc, total_new, date_label = build_email_html(row_meta, feeds)
+        save_newspaper_html(html_doc, date_label)
         send_mail(email_list, "嘎!RSS早报 · %s · 今日更新%d篇" % (date_label, total_new), html_doc)
     except Exception as e:
         print("==新版邮件排版失败，回退旧版===》》", e)
