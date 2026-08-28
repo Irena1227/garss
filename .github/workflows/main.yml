@@ -2,7 +2,7 @@ name: zhaoolee
 on:
   workflow_dispatch:    # 允许手动触发，方便测试
   schedule:
-    - cron:  '0 22 * * *'    # 国际标准时间22点（北京时间早上6点发） 
+    - cron:  '47 21 * * *'    # 国际标准时间21:47（北京时间早上5:47发）。改于2026-08-28：整点是GitHub调度高峰，连续两天延迟/旷工，挪到冷门时刻；本地另有看门狗脚本兜底（scripts/ensure-daily-paper.ps1）
   push:
     branches:    
       - main
